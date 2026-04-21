@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CRM Demo — Temporal</title>
+  <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+  <script src="https://unpkg.com/htmx.org@1.9.12/dist/ext/response-targets.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; margin: 0; padding: 24px; background: #f5f5f5; color: #222; }
+    h1 { margin: 0 0 4px; font-size: 1.5rem; }
+    .subtitle { color: #666; font-size: 0.9rem; margin: 0 0 24px; }
+    .card { background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.1); padding: 24px; margin-bottom: 20px; }
+    table { width: 100%; border-collapse: collapse; }
+    th { text-align: left; padding: 8px 12px; background: #f0f0f0; font-size: 0.85rem; color: #555; border-bottom: 1px solid #ddd; }
+    td { padding: 10px 12px; border-bottom: 1px solid #eee; font-size: 0.9rem; vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+    tr.htmx-swapping td { opacity: 0; transition: opacity 0.3s ease-out; }
+    /* Loading state: fade form + disable during in-flight request */
+    .htmx-request .form-row { opacity: 0.5; pointer-events: none; }
+    .htmx-request .btn-delete { opacity: 0.5; pointer-events: none; }
+    .htmx-indicator { display: none; }
+    .htmx-request .htmx-indicator { display: inline-block; }
+    .spinner {
+      display: inline-block; width: 14px; height: 14px; margin-left: 10px;
+      border: 2px solid #c7d2fe; border-top-color: #2563eb;
+      border-radius: 50%; animation: spin 0.7s linear infinite; vertical-align: middle;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .status-line { font-size: 0.85rem; color: #555; margin-top: 10px; min-height: 1.2em; }
+    .status-line.ok { color: #059669; }
+    .status-line.err { color: #dc2626; }
+    a { color: #2563eb; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .btn-delete {
+      background: none; border: 1px solid #dc2626; color: #dc2626; padding: 4px 10px;
+      border-radius: 4px; cursor: pointer; font-size: 0.8rem;
+    }
+    .btn-delete:hover { background: #dc2626; color: #fff; }
+    .form-row { display: flex; gap: 10px; align-items: center; }
+    .form-row input[type=text] {
+      flex: 1; padding: 8px 12px; border: 1px solid #ccc; border-radius: 4px; font-size: 0.9rem;
+    }
+    .form-row button[type=submit] {
+      padding: 8px 18px; background: #2563eb; color: #fff; border: none;
+      border-radius: 4px; cursor: pointer; font-size: 0.9rem;
+    }
+    .form-row button[type=submit]:hover { background: #1d4ed8; }
+    #error .error { color: #dc2626; font-size: 0.9rem; margin-top: 8px; }
+    #flash { min-height: 28px; }
+    .flash { font-size: 0.85rem; color: #555; padding: 6px 0; animation: fadeout 5s forwards; }
+    @keyframes fadeout { 0%,80% { opacity:1; } 100% { opacity:0; } }
+    .no-users { color: #888; font-size: 0.9rem; padding: 16px 12px; }
+    .temporal-link { color: #7c3aed; font-family: monospace; font-size: 0.8rem; }
+  </style>
+</head>
+<body hx-ext="response-targets">
+  <h1>CRM Demo</h1>
+  <p class="subtitle">
+    Powered by <a href="{{ temporal_ui_url }}" target="_blank">Temporal</a> —
+    workflows, Saga compensations, multi-replica workers.
+    <a href="{{ temporal_ui_url }}/namespaces/default/schedules/user-audit" target="_blank">Audit schedule</a>
+  </p>
+
+  <!-- Flash area (deletion workflow started) -->
+  <div id="flash" hx-swap-oob="true"></div>
+
+  <!-- Add user form -->
+  <div class="card">
+    <h2 style="margin:0 0 16px;font-size:1rem;">Add User</h2>
+    <form
+      hx-post="/api/users"
+      hx-target="#user-list tbody"
+      hx-target-4xx="#error"
+      hx-target-5xx="#error"
+      hx-swap="afterbegin"
+      hx-indicator="#add-status"
+      hx-on::before-request="document.getElementById('error').innerHTML=''; document.getElementById('add-status').textContent = 'Starting workflow…'; document.getElementById('add-status').className='status-line';"
+      hx-on::after-request="if(event.detail.successful){this.reset(); document.getElementById('add-status').textContent='✓ Workflow completed, user added.'; document.getElementById('add-status').className='status-line ok'; setTimeout(()=>{document.getElementById('add-status').textContent='';}, 3000);} else {document.getElementById('add-status').textContent=''; }"
+    >
+      <div class="form-row">
+        <input type="text" name="nickname" placeholder="nickname (a–z, 0–9, _)" required autocomplete="off">
+        <button type="submit">Add <span class="spinner htmx-indicator"></span></button>
+      </div>
+    </form>
+    <div id="add-status" class="status-line"></div>
+    <div id="error"></div>
+  </div>
+
+  <!-- Users table -->
+  <div class="card">
+    <h2 style="margin:0 0 16px;font-size:1rem;">Users</h2>
+    <table id="user-list">
+      <thead>
+        <tr>
+          <th>Nickname</th>
+          <th>Created (UTC)</th>
+          <th>Last Workflow</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody
+        hx-trigger="user-deleted from:body"
+        hx-get="/api/users"
+        hx-swap="innerHTML"
+      >
+        {% for u in users %}
+          {% include "_user_row.html" %}
+        {% else %}
+          <tr><td colspan="4" class="no-users">No users yet. Add one above.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <script>
+    // Show flash message in the flash div when a deletion workflow starts.
+    // The DELETE response body contains the flash HTML.
+    document.body.addEventListener("htmx:afterRequest", function(evt) {
+      if (evt.detail.requestConfig && evt.detail.requestConfig.verb === "delete") {
+        var flash = document.getElementById("flash");
+        if (flash && evt.detail.xhr.status === 200) {
+          flash.innerHTML = evt.detail.xhr.responseText;
+        }
+      }
+    });
+  </script>
+</body>
+</html>

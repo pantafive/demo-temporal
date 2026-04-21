@@ -1,0 +1,8 @@
+[tools]
+python = "3.13.12"
+uv = "latest"
+pre-commit = "latest"
+
+[env]
+VIRTUAL_ENV = "{{config_root}}/.venv"
+UV_PROJECT_ENVIRONMENT = "{{config_root}}/.venv"

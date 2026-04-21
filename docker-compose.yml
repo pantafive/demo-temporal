@@ -1,0 +1,173 @@
+services:
+  # ---------------------------------------------------------------------------
+  # Postgres 17
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: crm
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Temporal Server (auto-setup — creates namespaces + default search attrs)
+  # ---------------------------------------------------------------------------
+  temporal:
+    image: temporalio/auto-setup:1.29.6
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PWD: postgres
+      POSTGRES_SEEDS: postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "tctl --address temporal:7233 cluster health 2>&1 | grep -q SERVING"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 30s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Temporal Web UI
+  # ---------------------------------------------------------------------------
+  temporal-ui:
+    image: temporalio/ui:2.48.3
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: "http://localhost:${TEMPORAL_UI_PORT:-8080}"
+    ports:
+      - "${TEMPORAL_UI_PORT:-8080}:8080"
+    depends_on:
+      temporal:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # API
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command:
+      - uvicorn
+      - api:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/crm
+      TEMPORAL_HOST: temporal:7233
+      TEMPORAL_NAMESPACE: default
+      TEMPORAL_TASK_QUEUE: crm-tasks
+      TEMPORAL_UI_URL: "http://localhost:${TEMPORAL_UI_PORT:-8080}"
+      LOG_LEVEL: INFO
+    depends_on:
+      temporal:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Workers (3 explicit replicas — same image, distinct WORKER_IDENTITY)
+  # ---------------------------------------------------------------------------
+  worker-1:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command:
+      - python
+      - -m
+      - worker
+    environment:
+      WORKER_IDENTITY: worker-1
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/crm
+      TEMPORAL_HOST: temporal:7233
+      TEMPORAL_NAMESPACE: default
+      TEMPORAL_TASK_QUEUE: crm-tasks
+      MOCK_FAILURE_RATE: "0.2"
+      MOCK_MIN_MS: "300"
+      MOCK_MAX_MS: "2000"
+      DEMO_MODE: "false"
+      LOG_LEVEL: INFO
+    depends_on:
+      temporal:
+        condition: service_healthy
+    stop_grace_period: 35s
+    restart: unless-stopped
+
+  worker-2:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command:
+      - python
+      - -m
+      - worker
+    environment:
+      WORKER_IDENTITY: worker-2
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/crm
+      TEMPORAL_HOST: temporal:7233
+      TEMPORAL_NAMESPACE: default
+      TEMPORAL_TASK_QUEUE: crm-tasks
+      MOCK_FAILURE_RATE: "0.2"
+      MOCK_MIN_MS: "300"
+      MOCK_MAX_MS: "2000"
+      DEMO_MODE: "false"
+      LOG_LEVEL: INFO
+    depends_on:
+      temporal:
+        condition: service_healthy
+    stop_grace_period: 35s
+    restart: unless-stopped
+
+  worker-3:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command:
+      - python
+      - -m
+      - worker
+    environment:
+      WORKER_IDENTITY: worker-3
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/crm
+      TEMPORAL_HOST: temporal:7233
+      TEMPORAL_NAMESPACE: default
+      TEMPORAL_TASK_QUEUE: crm-tasks
+      MOCK_FAILURE_RATE: "0.2"
+      MOCK_MIN_MS: "300"
+      MOCK_MAX_MS: "2000"
+      DEMO_MODE: "false"
+      LOG_LEVEL: INFO
+    depends_on:
+      temporal:
+        condition: service_healthy
+    stop_grace_period: 35s
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
